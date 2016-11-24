@@ -28,6 +28,7 @@ import           Data.List
 import qualified Data.Map as Map
 import           Data.Maybe
 import           Data.Monoid
+import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Traversable
@@ -360,6 +361,10 @@ commandLineHandler progName isInterpreter = complicatedOptions
                   "Run runghc (alias for 'runghc')"
                   execCmd
                   (execOptsParser $ Just ExecRunGhc)
+      addCommand' "script"
+                  "Run a Stack Script"
+                  scriptCmd
+                  scriptOptsParser
 
       unless isInterpreter (do
         addCommand' "eval"
@@ -588,7 +593,7 @@ setupCmd sco@SetupCmdOpts{..} go@GlobalOpts{..} = do
                                  , configCompilerCheck (lcConfig lc)
                                  , Just $ bcStackYaml bc
                                  )
-              miniConfig <- loadMiniConfig (lcConfig lc)
+              let miniConfig = loadMiniConfig (lcConfig lc)
               runStackTGlobal miniConfig go $
                   setup sco wantedCompiler compilerCheck mstack
               )
@@ -778,6 +783,44 @@ execCmd ExecOpts {..} go@GlobalOpts{..} =
           wc <- getWhichCompiler
           pkgopts <- getPkgOpts menv wc pkgs
           return (prefix ++ compilerExeName wc, pkgopts ++ args)
+
+scriptOptsParser :: Parser ([String], [String])
+scriptOptsParser = (,)
+    <$> many (strOption (long "package" <> help "Additional packages that must be installed"))
+    <*> many (strArgument (metavar "-- ARGS (e.g. stack ghc -- X.hs -o x)"))
+
+-- | Run a Stack Script
+scriptCmd :: ([String], [String]) -> GlobalOpts -> IO ()
+scriptCmd (packages', args') go' = do
+    let go = go'
+            { globalSkipConfigs = True
+            , globalConfigMonoid = (globalConfigMonoid go')
+                { configMonoidInstallGHC = First $ Just True
+                }
+            }
+    withBuildConfigAndLock go $ \lk -> do
+        let targets = concatMap words packages'
+        unless (null targets) $
+            Stack.Build.build (const $ return ()) lk defaultBuildOptsCLI
+                { boptsCLITargets = map T.pack targets
+                }
+
+        config <- asks getConfig
+        menv <- liftIO $ configEnvOverride config defaultEnvSettings
+        (cmd, args) <- getGhcCmd "run" $ concat
+            [ ["-hide-all-packages"]
+            , map (\x -> "-package" ++ x)
+                $ Set.toList
+                $ Set.insert "base"
+                $ Set.fromList targets
+            , args'
+            ]
+        munlockFile lk -- Unlock before transferring control away.
+        exec menv cmd args
+  where
+      getGhcCmd prefix args = do
+          wc <- getWhichCompiler
+          return (prefix ++ compilerExeName wc, args)
 
 -- | Evaluate some haskell code inline.
 evalCmd :: EvalOpts -> GlobalOpts -> IO ()

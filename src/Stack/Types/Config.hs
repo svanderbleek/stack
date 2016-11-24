@@ -427,6 +427,7 @@ data GlobalOpts = GlobalOpts
     , globalTerminal     :: !Bool -- ^ We're in a terminal?
     , globalColorWhen    :: !ColorWhen -- ^ When to use ansi terminal colors
     , globalStackYaml    :: !(Maybe FilePath) -- ^ Override project stack.yaml
+    , globalSkipConfigs  :: !Bool -- ^ Ignore all configuration files
     } deriving (Show)
 
 -- | Parsed global command-line options monoid.

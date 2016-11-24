@@ -25,6 +25,7 @@
 module Stack.Config
   (MiniConfig
   ,loadConfig
+  ,loadConfigWithoutFiles
   ,loadConfigMaybeProject
   ,loadMiniConfig
   ,packagesParser
@@ -376,12 +377,10 @@ instance HasGHCVariant MiniConfig where
     getGHCVariant (MiniConfig v _) = v
 
 -- | Load the 'MiniConfig'.
-loadMiniConfig
-    :: MonadIO m
-    => Config -> m MiniConfig
-loadMiniConfig config = do
+loadMiniConfig :: Config -> MiniConfig
+loadMiniConfig config =
     let ghcVariant = fromMaybe GHCStandard (configGHCVariant0 config)
-    return (MiniConfig ghcVariant config)
+     in MiniConfig ghcVariant config
 
 -- Load the configuration, using environment variables, and defaults as
 -- necessary.
@@ -439,6 +438,57 @@ loadConfig :: StackM env m
 loadConfig configArgs mresolver mstackYaml =
     loadProjectConfig mstackYaml >>= loadConfigMaybeProject configArgs mresolver
 
+-- | Load up configuration, but do not use any config files.
+loadConfigWithoutFiles
+    :: StackM env m
+    => ConfigMonoid
+    -- ^ Config monoid from parsed command-line arguments
+    -> Maybe AbstractResolver
+    -- ^ Override resolver
+    -> Maybe (Path Abs File)
+    -- ^ Override stack.yaml
+    -> m (LoadConfig m)
+loadConfigWithoutFiles _ Nothing _ = error "When using a config-file-free setup, you must specify --resolver on the command line"
+loadConfigWithoutFiles _ _ (Just _) = error "When using a config-file-free setup, specifying a config file on the command line is an error"
+loadConfigWithoutFiles configArgs (Just resolver) Nothing = do
+    (stackRoot, userOwnsStackRoot) <- determineStackRootAndOwnership configArgs
+    userConfigPath <- getDefaultUserConfigPath stackRoot
+    config <- configFromConfigMonoid stackRoot userConfigPath (Just resolver) Nothing configArgs
+    unless (configAllowDifferentUser config || userOwnsStackRoot) $
+        throwM (UserDoesn'tOwnDirectory stackRoot)
+    return LoadConfig
+        { lcConfig          = config
+        , lcLoadBuildConfig = loadBuildConfigWithoutFiles stackRoot config resolver
+        , lcProjectRoot     = Nothing
+        }
+
+-- | Load up build configuration, but do not use any config files.
+loadBuildConfigWithoutFiles
+    :: StackM env m
+    => Path Abs Dir
+    -> Config
+    -> AbstractResolver -- override resolver
+    -> Maybe CompilerVersion -- override compiler
+    -> m BuildConfig
+loadBuildConfigWithoutFiles _ _ _ (Just _) = error "Received a CompilerVersion in loadBuildConfigWithoutFiles"
+loadBuildConfigWithoutFiles stackRoot config aresolver Nothing = do
+    let miniConfig = loadMiniConfig config
+    (mbp, loadedResolver) <- runReaderT
+        (makeConcreteResolver aresolver >>= loadResolver Nothing)
+        miniConfig
+    return BuildConfig
+        { bcConfig = config
+        , bcResolver = loadedResolver
+        , bcWantedMiniBuildPlan = mbp
+        , bcPackageEntries = []
+        , bcExtraDeps = mempty
+        , bcExtraPackageDBs = []
+        , bcStackYaml = stackRoot </> $(mkRelFile "non-existent-stack.yaml")
+        , bcFlags = mempty
+        , bcImplicitGlobal = True
+        , bcGHCVariant = getGHCVariant miniConfig
+        }
+
 -- | Load the build configuration, adds build-specific values to config loaded by @loadConfig@.
 -- values.
 loadBuildConfig :: StackM env m
@@ -449,7 +499,7 @@ loadBuildConfig :: StackM env m
                 -> m BuildConfig
 loadBuildConfig mproject config mresolver mcompiler = do
     env <- ask
-    miniConfig <- loadMiniConfig config
+    let miniConfig = loadMiniConfig config
 
     (project', stackYamlFP) <- case mproject of
       Just (project, fp, _) -> do

@@ -193,7 +193,9 @@ loadConfigWithOpts :: GlobalOpts -> IO (LoadConfig (StackT () IO))
 loadConfigWithOpts go@GlobalOpts{..} = do
     mstackYaml <- forM globalStackYaml resolveFile'
     runStackTGlobal () go $ do
-        lc <- loadConfig globalConfigMonoid globalResolver mstackYaml
+        lc <- if globalSkipConfigs
+                then loadConfigWithoutFiles globalConfigMonoid globalResolver mstackYaml
+                else loadConfig globalConfigMonoid globalResolver mstackYaml
         -- If we have been relaunched in a Docker container, perform in-container initialization
         -- (switch UID, etc.).  We do this after first loading the configuration since it must
         -- happen ASAP but needs a configuration.
@@ -207,9 +209,9 @@ withMiniConfigAndLock
     -> StackT MiniConfig IO ()
     -> IO ()
 withMiniConfigAndLock go@GlobalOpts{..} inner = do
-    miniConfig <- runStackTGlobal () go $ do
-        lc <- loadConfigMaybeProject globalConfigMonoid globalResolver Nothing
-        loadMiniConfig (lcConfig lc)
+    miniConfig <- runStackTGlobal () go
+        $ fmap (loadMiniConfig . lcConfig)
+        $ loadConfigMaybeProject globalConfigMonoid globalResolver Nothing
     runStackTGlobal miniConfig go inner
 
 -- | Unlock a lock file, if the value is Just
