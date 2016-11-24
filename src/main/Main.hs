@@ -23,7 +23,9 @@ import           Control.Monad.Trans.Either (EitherT)
 import           Control.Monad.Writer.Lazy (Writer)
 import           Data.Attoparsec.Args (parseArgs, EscapingMode (Escaping))
 import           Data.Attoparsec.Interpreter (getInterpreterArgs)
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
+import qualified Data.Conduit.List as CL
 import           Data.List
 import qualified Data.Map as Map
 import           Data.Maybe
@@ -63,7 +65,7 @@ import           Stack.Coverage
 import qualified Stack.Docker as Docker
 import           Stack.Dot
 import           Stack.Exec
-import           Stack.GhcPkg (findGhcPkgField)
+import           Stack.GhcPkg (findGhcPkgField, ghcPkgExeName)
 import qualified Stack.Nix as Nix
 import           Stack.Fetch
 import           Stack.FileWatch
@@ -799,28 +801,45 @@ scriptCmd (packages', args') go' = do
                 }
             }
     withBuildConfigAndLock go $ \lk -> do
-        let targets = concatMap words packages'
-        unless (null targets) $
-            Stack.Build.build (const $ return ()) lk defaultBuildOptsCLI
-                { boptsCLITargets = map T.pack targets
-                }
-
         config <- asks getConfig
         menv <- liftIO $ configEnvOverride config defaultEnvSettings
-        (cmd, args) <- getGhcCmd "run" $ concat
-            [ ["-hide-all-packages"]
-            , map (\x -> "-package" ++ x)
-                $ Set.toList
-                $ Set.insert "base"
-                $ Set.fromList targets
-            , args'
-            ]
+        wc <- getWhichCompiler
+
+        let targets = concatMap words packages'
+            targetsSet = Set.fromList targets
+        unless (null targets) $ do
+            -- Optimization: use the relatively cheap ghc-pkg list
+            -- --simple-output to check which packages are installed
+            -- already. If all needed packages are available, we can
+            -- skip the (rather expensive) build call below.
+            bss <- sinkProcessStdout
+                Nothing menv (ghcPkgExeName wc)
+                ["list", "--simple-output"] CL.consume
+            let installed = Set.fromList
+                          $ map toPackageName
+                          $ words
+                          $ S8.unpack
+                          $ S8.concat bss
+            if Set.null $ Set.difference targetsSet installed
+                then $logDebug "All packages already installed"
+                else do
+                    $logDebug "Missing packages, performing installation"
+                    Stack.Build.build (const $ return ()) lk defaultBuildOptsCLI
+                        { boptsCLITargets = map T.pack targets
+                        }
+
+        let args = concat
+                [ ["-hide-all-packages"]
+                , map (\x -> "-package" ++ x)
+                    $ Set.toList
+                    $ Set.insert "base" targetsSet
+                , args'
+                ]
+        let cmd = "run" ++ compilerExeName wc
         munlockFile lk -- Unlock before transferring control away.
         exec menv cmd args
   where
-      getGhcCmd prefix args = do
-          wc <- getWhichCompiler
-          return (prefix ++ compilerExeName wc, args)
+    toPackageName = reverse . drop 1 . dropWhile (/= '-') . reverse
 
 -- | Evaluate some haskell code inline.
 evalCmd :: EvalOpts -> GlobalOpts -> IO ()
