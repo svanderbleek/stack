@@ -21,6 +21,14 @@ Major changes:
   installation should now include a `stack setup` line or use the `--install-ghc`
   flag.
   [#2221](https://github.com/commercialhaskell/stack/issues/2221)
+* A new command, `script`, has been added, intended to make the script
+  interpreter workflow more reliable, easier to use, and more
+  efficient. This command forces the user to provide a `--resolver`
+  value, ignores all config files for more reproducible results, and
+  optimizes the existing package check to make the common case of all
+  packages already being present much faster. This mode does require
+  that all packages be present in a snapshot, however.
+  [#2805](https://github.com/commercialhaskell/stack/issues/2805)
 
 Behavior changes:
 
