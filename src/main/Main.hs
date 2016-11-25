@@ -27,6 +27,7 @@ import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.Conduit.List as CL
 import           Data.List
+import           Data.List.Split (splitWhen)
 import qualified Data.Map as Map
 import           Data.Maybe
 import           Data.Monoid
@@ -98,6 +99,7 @@ import           Stack.Types.Version
 import           Stack.Types.Config
 import           Stack.Types.Compiler
 import           Stack.Types.Internal
+import           Stack.Types.PackageName (parsePackageNameFromString)
 import           Stack.Types.StackT
 import           Stack.Upgrade
 import qualified Stack.Upload as Upload
@@ -805,8 +807,13 @@ scriptCmd (packages', args') go' = do
         menv <- liftIO $ configEnvOverride config defaultEnvSettings
         wc <- getWhichCompiler
 
-        let targets = concatMap words packages'
+        let targets = concatMap wordsComma packages'
             targetsSet = Set.fromList targets
+
+        -- Ensure only package names are provided. We do not allow
+        -- overriding packages in a snapshot.
+        mapM_ parsePackageNameFromString targets
+
         unless (null targets) $ do
             -- Optimization: use the relatively cheap ghc-pkg list
             -- --simple-output to check which packages are installed
@@ -840,6 +847,9 @@ scriptCmd (packages', args') go' = do
         exec menv cmd args
   where
     toPackageName = reverse . drop 1 . dropWhile (/= '-') . reverse
+
+    -- Like words, but splits on both commas and spaces
+    wordsComma = splitWhen (\c -> c == ' ' || c == ',')
 
 -- | Evaluate some haskell code inline.
 evalCmd :: EvalOpts -> GlobalOpts -> IO ()
