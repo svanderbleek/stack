@@ -797,12 +797,11 @@ scriptOptsParser = (,)
 scriptCmd :: ([String], [String]) -> GlobalOpts -> IO ()
 scriptCmd (packages', args') go' = do
     let go = go'
-            { globalSkipConfigs = True
-            , globalConfigMonoid = (globalConfigMonoid go')
+            { globalConfigMonoid = (globalConfigMonoid go')
                 { configMonoidInstallGHC = First $ Just True
                 }
             }
-    withBuildConfigAndLock go $ \lk -> do
+    withBuildConfigNoFileAndLock go $ \lk -> do
         config <- asks getConfig
         menv <- liftIO $ configEnvOverride config defaultEnvSettings
         wc <- getWhichCompiler
@@ -821,7 +820,7 @@ scriptCmd (packages', args') go' = do
             -- skip the (rather expensive) build call below.
             bss <- sinkProcessStdout
                 Nothing menv (ghcPkgExeName wc)
-                ["list", "--simple-output"] CL.consume
+                ["list", "--simple-output"] CL.consume -- FIXME use the package info from envConfigPackages, or is that crazy?
             let installed = Set.fromList
                           $ map toPackageName
                           $ words

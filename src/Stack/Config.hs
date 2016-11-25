@@ -443,49 +443,32 @@ loadConfigWithoutFiles
     :: StackM env m
     => ConfigMonoid
     -- ^ Config monoid from parsed command-line arguments
-    -> Maybe AbstractResolver
-    -- ^ Override resolver
-    -> Maybe (Path Abs File)
-    -- ^ Override stack.yaml
-    -> m (LoadConfig m)
-loadConfigWithoutFiles _ Nothing _ = error "When using a config-file-free setup, you must specify --resolver on the command line"
-loadConfigWithoutFiles _ _ (Just _) = error "When using a config-file-free setup, specifying a config file on the command line is an error"
-loadConfigWithoutFiles configArgs (Just resolver) Nothing = do
+    -> AbstractResolver
+    -- ^ resolver
+    -> m BuildConfigNoFile
+loadConfigWithoutFiles configArgs resolver = do
     (stackRoot, userOwnsStackRoot) <- determineStackRootAndOwnership configArgs
     userConfigPath <- getDefaultUserConfigPath stackRoot
     config <- configFromConfigMonoid stackRoot userConfigPath (Just resolver) Nothing configArgs
     unless (configAllowDifferentUser config || userOwnsStackRoot) $
         throwM (UserDoesn'tOwnDirectory stackRoot)
-    return LoadConfig
-        { lcConfig          = config
-        , lcLoadBuildConfig = loadBuildConfigWithoutFiles stackRoot config resolver
-        , lcProjectRoot     = Nothing
-        }
+    loadBuildConfigWithoutFiles config resolver
 
 -- | Load up build configuration, but do not use any config files.
 loadBuildConfigWithoutFiles
     :: StackM env m
-    => Path Abs Dir
-    -> Config
+    => Config
     -> AbstractResolver -- override resolver
-    -> Maybe CompilerVersion -- override compiler
-    -> m BuildConfig
-loadBuildConfigWithoutFiles _ _ _ (Just _) = error "Received a CompilerVersion in loadBuildConfigWithoutFiles"
-loadBuildConfigWithoutFiles stackRoot config aresolver Nothing = do
+    -> m BuildConfigNoFile
+loadBuildConfigWithoutFiles config aresolver = do
     let miniConfig = loadMiniConfig config
     (mbp, loadedResolver) <- runReaderT
         (makeConcreteResolver aresolver >>= loadResolver Nothing)
         miniConfig
-    return BuildConfig
+    return BuildConfigNoFile
         { bcConfig = config
         , bcResolver = loadedResolver
         , bcWantedMiniBuildPlan = mbp
-        , bcPackageEntries = []
-        , bcExtraDeps = mempty
-        , bcExtraPackageDBs = []
-        , bcStackYaml = stackRoot </> $(mkRelFile "non-existent-stack.yaml")
-        , bcFlags = mempty
-        , bcImplicitGlobal = True
         , bcGHCVariant = getGHCVariant miniConfig
         }
 
@@ -588,16 +571,18 @@ loadBuildConfig mproject config mresolver mcompiler = do
     extraPackageDBs <- mapM resolveDir' (projectExtraPackageDBs project)
 
     return BuildConfig
-        { bcConfig = config
-        , bcResolver = loadedResolver
-        , bcWantedMiniBuildPlan = mbp
+        { bcBuildConfigNoFile = BuildConfigNoFile
+            { bcConfig = config
+            , bcResolver = loadedResolver
+            , bcWantedMiniBuildPlan = mbp
+            , bcGHCVariant = getGHCVariant miniConfig
+            }
         , bcPackageEntries = projectPackages project
         , bcExtraDeps = projectExtraDeps project
         , bcExtraPackageDBs = extraPackageDBs
         , bcStackYaml = stackYamlFP
         , bcFlags = projectFlags project
         , bcImplicitGlobal = isNothing mproject
-        , bcGHCVariant = getGHCVariant miniConfig
         }
 
 -- | Resolve a PackageEntry into a list of paths, downloading and cloning as

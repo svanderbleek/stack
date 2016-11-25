@@ -140,8 +140,11 @@ instance HasStackRoot Ctx
 instance HasPlatform Ctx
 instance HasGHCVariant Ctx
 instance HasConfig Ctx
+instance HasBuildConfigNoFile Ctx
 instance HasBuildConfig Ctx where
     getBuildConfig = getBuildConfig . getEnvConfig
+instance HasEnvConfigNoFile Ctx where
+    getEnvConfigNoFile = getEnvConfigNoFile . ctxEnvConfig
 instance HasEnvConfig Ctx where
     getEnvConfig = ctxEnvConfig
 
@@ -259,7 +262,7 @@ addFinal lp package isAllInOne = do
                 , taskConfigOpts = TaskConfigOpts missing $ \missing' ->
                     let allDeps = Map.union present missing'
                      in configureOpts
-                            (getEnvConfig ctx)
+                            (getEnvConfigNoFile ctx)
                             (baseConfigOpts ctx)
                             allDeps
                             True -- local
@@ -440,7 +443,7 @@ installPackageGivenDeps isAllInOne ps package minstalled (missing, present, minL
                 let allDeps = Map.union present missing'
                     destLoc = piiLocation ps <> minLoc
                  in configureOpts
-                        (getEnvConfig ctx)
+                        (getEnvConfigNoFile ctx)
                         (baseConfigOpts ctx)
                         allDeps
                         (psLocal ps)
@@ -552,7 +555,7 @@ checkDirtiness ps installed package present wanted = do
     ctx <- ask
     moldOpts <- flip runLoggingT (logFunc ctx) $ tryGetFlagCache installed
     let configOpts = configureOpts
-            (getEnvConfig ctx)
+            (getEnvConfigNoFile ctx)
             (baseConfigOpts ctx)
             present
             (psLocal ps)

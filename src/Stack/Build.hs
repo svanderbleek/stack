@@ -86,7 +86,7 @@ import qualified Control.Monad.Catch as Catch
 --   If a buildLock is passed there is an important contract here.  That lock must
 --   protect the snapshot, and it must be safe to unlock it if there are no further
 --   modifications to the snapshot to be performed by this build.
-build :: (StackM env m, HasEnvConfig env, MonadBaseUnlift IO m)
+build :: (StackM env m, HasEnvConfigNoFile env, HasMaybeBuildConfig env, MonadBaseUnlift IO m)
       => (Set (Path Abs File) -> IO ()) -- ^ callback after discovering all local files
       -> Maybe FileLock
       -> BuildOptsCLI
@@ -99,9 +99,9 @@ build setLocalFiles mbuildLk boptsCli = fixCodePage $ do
     (targets, mbp, locals, extraToBuild, extraDeps, sourceMap) <- loadSourceMapFull NeedTargets boptsCli
 
     -- Set local files, necessary for file watching
-    stackYaml <- asks $ bcStackYaml . getBuildConfig
+    mstackYaml <- asks $ fmap bcStackYaml . getMaybeBuildConfig
     liftIO $ setLocalFiles
-           $ Set.insert stackYaml
+           $ maybe id Set.insert mstackYaml
            $ Set.unions
            $ map lpFiles locals
 
@@ -156,7 +156,7 @@ allLocal =
 checkCabalVersion :: (StackM env m, HasEnvConfig env) => m ()
 checkCabalVersion = do
     allowNewer <- asks (configAllowNewer . getConfig)
-    cabalVer <- asks (envConfigCabalVersion . getEnvConfig)
+    cabalVer <- asks (envConfigCabalVersion . getEnvConfigNoFile)
     -- https://github.com/haskell/cabal/issues/2023
     when (allowNewer && cabalVer < $(mkVersion "1.22")) $ throwM $
         CabalVersionException $
@@ -302,7 +302,7 @@ withLoadPackage :: (StackM env m, HasEnvConfig env, MonadBaseUnlift IO m)
                 -> ((PackageName -> Version -> Map FlagName Bool -> [Text] -> IO Package) -> m a)
                 -> m a
 withLoadPackage menv inner = do
-    econfig <- asks getEnvConfig
+    econfig <- asks getEnvConfigNoFile
     withCabalLoader menv $ \cabalLoader ->
         inner $ \name version flags ghcOptions -> do
             bs <- cabalLoader $ PackageIdentifier name version
@@ -314,7 +314,7 @@ withLoadPackage menv inner = do
             return pkg
   where
     -- | Package config to be used for dependencies
-    depPackageConfig :: EnvConfig -> Map FlagName Bool -> [Text] -> PackageConfig
+    depPackageConfig :: EnvConfigNoFile -> Map FlagName Bool -> [Text] -> PackageConfig
     depPackageConfig econfig flags ghcOptions = PackageConfig
         { packageConfigEnableTests = False
         , packageConfigEnableBenchmarks = False

@@ -251,7 +251,7 @@ precompiledCacheFile :: (MonadThrow m, MonadReader env m, HasEnvConfig env, Mona
                      -> Set GhcPkgId -- ^ dependencies
                      -> m (Path Abs File, m (Path Abs File))
 precompiledCacheFile pkgident copts installedPackageIDs = do
-    ec <- asks getEnvConfig
+    ec <- asks getEnvConfigNoFile
 
     compiler <- parseRelDir $ compilerVersionString $ envConfigCompilerVersion ec
     cabal <- parseRelDir $ versionString $ envConfigCabalVersion ec

@@ -266,7 +266,7 @@ getSetupExe :: (StackM env m, HasEnvConfig env)
             -> m (Maybe (Path Abs File))
 getSetupExe setupHs setupShimHs tmpdir = do
     wc <- getWhichCompiler
-    econfig <- asks getEnvConfig
+    econfig <- asks getEnvConfigNoFile
     platformDir <- platformGhcRelDir
     let config = getConfig econfig
         baseNameS = concat
@@ -307,7 +307,7 @@ getSetupExe setupHs setupShimHs tmpdir = do
             menv <- getMinimalEnvOverride
             let args = buildSetupArgs ++
                     [ "-package"
-                    , "Cabal-" ++ versionString (envConfigCabalVersion econfig)
+                    , "Cabal-" ++ versionString (envConfigCabalVersion (getEnvConfigNoFile econfig))
                     , toFilePath setupHs
                     , toFilePath setupShimHs
                     , "-o"
@@ -353,7 +353,7 @@ withExecuteEnv menv bopts boptsCli baseConfigOpts locals globalPackages snapshot
         unless setupShimHsExists $ liftIO $ S.writeFile (toFilePath setupShimHs) setupGhciShimCode
         setupExe <- getSetupExe setupHs setupShimHs tmpdir
 
-        cabalPkgVer <- asks (envConfigCabalVersion . getEnvConfig)
+        cabalPkgVer <- asks (envConfigCabalVersion . getEnvConfigNoFile)
         globalDB <- getGlobalDB menv =<< getWhichCompiler
         snapshotPackagesTVar <- liftIO $ newTVarIO (toDumpPackagesByGhcPkgId snapshotPackages)
         localPackagesTVar <- liftIO $ newTVarIO (toDumpPackagesByGhcPkgId localPackages)
@@ -582,7 +582,7 @@ executePlan' :: (StackM env m, HasEnvConfig env)
 executePlan' installedMap0 targets plan ee@ExecuteEnv {..} = do
     when (toCoverage $ boptsTestOpts eeBuildOpts) deleteHpcReports
     wc <- getWhichCompiler
-    cv <- asks $ envConfigCompilerVersion . getEnvConfig
+    cv <- asks $ envConfigCompilerVersion . getEnvConfigNoFile
     case Map.toList $ planUnregisterLocal plan of
         [] -> return ()
         ids -> do

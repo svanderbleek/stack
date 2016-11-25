@@ -29,8 +29,12 @@ instance HasGHCVariant config => HasGHCVariant (Env config) where
     getGHCVariant = getGHCVariant . envConfig
 instance HasConfig config => HasConfig (Env config) where
     getConfig = getConfig . envConfig
+instance HasBuildConfigNoFile config => HasBuildConfigNoFile (Env config) where
+    getBuildConfigNoFile = getBuildConfigNoFile . envConfig
 instance HasBuildConfig config => HasBuildConfig (Env config) where
     getBuildConfig = getBuildConfig . envConfig
+instance HasEnvConfigNoFile config => HasEnvConfigNoFile (Env config) where
+    getEnvConfigNoFile = getEnvConfigNoFile . envConfig
 instance HasEnvConfig config => HasEnvConfig (Env config) where
     getEnvConfig = getEnvConfig . envConfig
 
@@ -104,12 +108,14 @@ buildOptsHaddock =
 envConfigBuildOpts :: Lens' EnvConfig BuildOpts
 envConfigBuildOpts =
     lens
-        (configBuild . bcConfig . envConfigBuildConfig)
+        (configBuild . bcConfig . bcBuildConfigNoFile . envConfigBuildConfig)
         (\envCfg bopts ->
               envCfg
               { envConfigBuildConfig = (envConfigBuildConfig envCfg)
-                { bcConfig = (bcConfig (envConfigBuildConfig envCfg))
-                  { configBuild = bopts
+                { bcBuildConfigNoFile = (bcBuildConfigNoFile (envConfigBuildConfig envCfg))
+                  { bcConfig = (bcConfig (bcBuildConfigNoFile (envConfigBuildConfig envCfg)))
+                    { configBuild = bopts
+                    }
                   }
                 }
               })

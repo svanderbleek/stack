@@ -14,6 +14,7 @@
 
 module Stack.Setup
   ( setupEnv
+  , setupEnvNoFile
   , ensureCompiler
   , ensureDockerStackExe
   , getSystemCompiler
@@ -196,24 +197,27 @@ instance Show SetupException where
         , T.unpack dockerStackExeArgName
         , "' option to specify a location"]
 
--- | Modify the environment variables (like PATH) appropriately, possibly doing installation too
-setupEnv :: (StackM env m, HasBuildConfig env, HasGHCVariant env)
-         => Maybe Text -- ^ Message to give user when necessary GHC is not available
-         -> m EnvConfig
-setupEnv mResolveMissingGHC = do
-    bconfig <- asks getBuildConfig
+type TempTuple = (Map Text Text, EnvOverride, WhichCompiler, Path Abs Dir, CompilerVersion, Maybe ExtraDirs)
+
+setupEnvCommon
+  :: (StackM env m, HasBuildConfigNoFile env, HasGHCVariant env)
+  => Maybe Text
+  -> Maybe BuildConfig
+  -> m (TempTuple, EnvConfigNoFile)
+setupEnvCommon mResolveMissingGHC mbuildConfig = do
+    bconfig <- asks getBuildConfigNoFile
     let platform = getPlatform bconfig
         wc = whichCompiler (bcWantedCompiler bconfig)
         sopts = SetupOpts
-            { soptsInstallIfMissing = configInstallGHC $ bcConfig bconfig
-            , soptsUseSystem = configSystemGHC $ bcConfig bconfig
+            { soptsInstallIfMissing = configInstallGHC $ getConfig bconfig
+            , soptsUseSystem = configSystemGHC $ getConfig bconfig
             , soptsWantedCompiler = bcWantedCompiler bconfig
-            , soptsCompilerCheck = configCompilerCheck $ bcConfig bconfig
-            , soptsStackYaml = Just $ bcStackYaml bconfig
+            , soptsCompilerCheck = configCompilerCheck $ getConfig bconfig
+            , soptsStackYaml = fmap bcStackYaml mbuildConfig
             , soptsForceReinstall = False
             , soptsSanityCheck = False
-            , soptsSkipGhcCheck = configSkipGHCCheck $ bcConfig bconfig
-            , soptsSkipMsys = configSkipMsys $ bcConfig bconfig
+            , soptsSkipGhcCheck = configSkipGHCCheck $ getConfig bconfig
+            , soptsSkipMsys = configSkipMsys $ getConfig bconfig
             , soptsUpgradeCabal = False
             , soptsResolveMissingGHC = mResolveMissingGHC
             , soptsSetupInfoYaml = defaultSetupInfoYaml
@@ -235,31 +239,51 @@ setupEnv mResolveMissingGHC = do
         <*> Concurrently (getGlobalDB menv wc)
 
     $logDebug "Resolving package entries"
-    packages <- mapM
-        (resolvePackageEntry menv (bcRoot bconfig))
-        (bcPackageEntries bconfig)
-    let envConfig0 = EnvConfig
-            { envConfigBuildConfig = bconfig
-            , envConfigCabalVersion = cabalVer
-            , envConfigCompilerVersion = compilerVer
-            , envConfigCompilerBuild = compilerBuild
-            , envConfigPackages = Map.fromList $ concat packages
-            }
+
+    return ((env, menv, wc, globaldb, compilerVer, mghcBin), EnvConfigNoFile
+        { envConfigBuildConfigNoFile = getBuildConfigNoFile bconfig
+        , envConfigCabalVersion = cabalVer
+        , envConfigCompilerVersion = compilerVer
+        , envConfigCompilerBuild = compilerBuild
+        })
+
+getModifiedConfig
+    :: (MonadIO m, MonadCatch m, MonadBaseControl IO m, MonadReader env m, MonadLogger m, HasEnvConfigNoFile env)
+    => TempTuple
+    -> Maybe EnvConfig
+    -> m Config
+getModifiedConfig (env, menv, wc, globaldb, compilerVer, mghcBin) meconfigFile = do
+    config <- asks getConfig
+    let platform = getPlatform config
 
     -- extra installation bin directories
-    mkDirs <- runReaderT extraBinDirs envConfig0
+    mkDirs <-
+      case meconfigFile of
+        Nothing -> fmap const extraBinDirsNoFile
+        Just econfigFile -> runReaderT extraBinDirs econfigFile
     let mpath = Map.lookup "PATH" env
     depsPath <- augmentPath (mkDirs False) mpath
     localsPath <- augmentPath (mkDirs True) mpath
 
-    deps <- runReaderT packageDatabaseDeps envConfig0
+    deps <- packageDatabaseDeps
     createDatabase menv wc deps
-    localdb <- runReaderT packageDatabaseLocal envConfig0
-    createDatabase menv wc localdb
-    extras <- runReaderT packageDatabaseExtra envConfig0
-    let mkGPP locals = mkGhcPackagePath locals localdb deps extras globaldb
+    mlocaldb <-
+      case meconfigFile of
+        Nothing -> return Nothing
+        Just econfigFile -> do
+          localdb <- runReaderT packageDatabaseLocal econfigFile
+          createDatabase menv wc localdb
+          return $ Just localdb
+    extras <-
+      case meconfigFile of
+        Nothing -> return []
+        Just econfigFile -> runReaderT packageDatabaseExtra econfigFile
+    let mkGPP locals = mkGhcPackagePath (if locals then mlocaldb else Nothing) deps extras globaldb
 
-    distDir <- runReaderT distRelativeDir envConfig0
+    mdistDir <-
+      case meconfigFile of
+        Nothing -> return Nothing
+        Just econfigFile -> fmap Just $ runReaderT distRelativeDir econfigFile
 
     executablePath <- liftIO getExecutablePath
 
@@ -287,7 +311,7 @@ setupEnv mResolveMissingGHC = do
                                 then Map.union utf8EnvVars
                                 else id)
 
-                        $ case (soptsSkipMsys sopts, platform) of
+                        $ case (configSkipMsys config, platform) of
                             (False, Platform Cabal.I386   Cabal.Windows)
                                 -> Map.insert "MSYSTEM" "MINGW32"
                             (False, Platform Cabal.X86_64 Cabal.Windows)
@@ -297,32 +321,62 @@ setupEnv mResolveMissingGHC = do
                         -- For reasoning and duplication, see: https://github.com/fpco/stack/issues/70
                         $ Map.insert "HASKELL_PACKAGE_SANDBOX" (T.pack $ toFilePathNoTrailingSep deps)
                         $ Map.insert "HASKELL_PACKAGE_SANDBOXES"
-                            (T.pack $ if esIncludeLocals es
-                                then intercalate [searchPathSeparator]
+                            (T.pack $ case (esIncludeLocals es, mlocaldb) of
+                                (True, Just localdb) ->
+                                     intercalate [searchPathSeparator]
                                         [ toFilePathNoTrailingSep localdb
                                         , toFilePathNoTrailingSep deps
                                         , ""
                                         ]
-                                else intercalate [searchPathSeparator]
+                                _ -> intercalate [searchPathSeparator]
                                         [ toFilePathNoTrailingSep deps
                                         , ""
                                         ])
-                        $ Map.insert "HASKELL_DIST_DIR" (T.pack $ toFilePathNoTrailingSep distDir) env
+                        $ maybe id (Map.insert "HASKELL_DIST_DIR" . T.pack . toFilePathNoTrailingSep) mdistDir
+                        $ env
 
                     () <- atomicModifyIORef envRef $ \m' ->
                         (Map.insert es eo m', ())
                     return eo
 
-    return EnvConfig
-        { envConfigBuildConfig = bconfig
-            { bcConfig = maybe id addIncludeLib mghcBin
-                          (bcConfig bconfig)
+    return $ maybe id addIncludeLib mghcBin config
                 { configEnvOverride = getEnvOverride' }
+
+setupEnvNoFile
+  :: (StackM env m, HasBuildConfigNoFile env, HasGHCVariant env)
+  => m EnvConfigNoFile
+setupEnvNoFile = do
+    (extra, envConfigNF) <- setupEnvCommon Nothing Nothing
+    config <- runReaderT (getModifiedConfig extra Nothing) envConfigNF
+    return envConfigNF
+        { envConfigBuildConfigNoFile = (envConfigBuildConfigNoFile envConfigNF)
+            { bcConfig = config
             }
-        , envConfigCabalVersion = cabalVer
-        , envConfigCompilerVersion = compilerVer
-        , envConfigCompilerBuild = compilerBuild
-        , envConfigPackages = envConfigPackages envConfig0
+        }
+
+-- | Modify the environment variables (like PATH) appropriately, possibly doing installation too
+setupEnv :: (StackM env m, HasBuildConfig env, HasGHCVariant env)
+         => Maybe Text -- ^ Message to give user when necessary GHC is not available
+         -> m EnvConfig
+setupEnv mResolveMissingGHC = do
+    bconfig <- asks getBuildConfig
+    (extra@(_, menv, _, _, _, _), envConfigNF) <- setupEnvCommon mResolveMissingGHC (Just bconfig)
+    packages <- mapM
+        (resolvePackageEntry menv (bcRoot bconfig))
+        (bcPackageEntries bconfig)
+    let envConfig0 = EnvConfig
+            { envConfigBuildConfig = bconfig
+            , envConfigNoFile = envConfigNF
+            , envConfigPackages = Map.fromList $ concat packages
+            }
+
+    config <- runReaderT (getModifiedConfig extra (Just envConfig0)) envConfig0
+    let bconfigNF = (getBuildConfigNoFile bconfig) { bcConfig = config }
+    return envConfig0
+        { envConfigBuildConfig = bconfig { bcBuildConfigNoFile = bconfigNF }
+        , envConfigNoFile = (envConfigNoFile envConfig0)
+            { envConfigBuildConfigNoFile = bconfigNF
+            }
         }
 
 -- | Add the include and lib paths to the given Config

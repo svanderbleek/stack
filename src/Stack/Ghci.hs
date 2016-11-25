@@ -551,7 +551,7 @@ makeGhciPkgInfo
     -> m GhciPkgInfo
 makeGhciPkgInfo sourceMap installedMap locals addPkgs mfileTargets name cabalfp target = do
     bopts <- asks (configBuild . getConfig)
-    econfig <- asks getEnvConfig
+    econfig <- asks getEnvConfigNoFile
     bconfig <- asks getBuildConfig
     let config =
             PackageConfig

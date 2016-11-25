@@ -35,10 +35,12 @@ module Stack.Types.Config
   ,getMinimalEnvOverride
   -- ** BuildConfig & HasBuildConfig
   ,BuildConfig(..)
+  ,BuildConfigNoFile(..)
   ,bcRoot
   ,bcWorkDir
   ,bcWantedCompiler
   ,HasBuildConfig(..)
+  ,HasBuildConfigNoFile(..)
   -- ** GHCVariant & HasGHCVariant
   ,GHCVariant(..)
   ,ghcVariantName
@@ -49,8 +51,11 @@ module Stack.Types.Config
   -- ** Constraint synonym for use with StackMini
   ,StackMiniM
   -- ** EnvConfig & HasEnvConfig
+  ,EnvConfigNoFile(..)
   ,EnvConfig(..)
+  ,HasEnvConfigNoFile(..)
   ,HasEnvConfig(..)
+  ,HasMaybeEnvConfig(..)
   ,getWhichCompiler
   ,getCompilerPath
   -- * Details
@@ -120,6 +125,7 @@ module Stack.Types.Config
   ,docDirSuffix
   ,flagCacheLocal
   ,extraBinDirs
+  ,extraBinDirsNoFile
   ,hpcReportDir
   ,installationRootDeps
   ,installationRootLocal
@@ -427,7 +433,6 @@ data GlobalOpts = GlobalOpts
     , globalTerminal     :: !Bool -- ^ We're in a terminal?
     , globalColorWhen    :: !ColorWhen -- ^ When to use ansi terminal colors
     , globalStackYaml    :: !(Maybe FilePath) -- ^ Override project stack.yaml
-    , globalSkipConfigs  :: !Bool -- ^ Ignore all configuration files
     } deriving (Show)
 
 -- | Parsed global command-line options monoid.
@@ -468,13 +473,19 @@ readColorWhen = do
 -- | A superset of 'Config' adding information on how to build code. The reason
 -- for this breakdown is because we will need some of the information from
 -- 'Config' in order to determine the values here.
-data BuildConfig = BuildConfig
+data BuildConfigNoFile = BuildConfigNoFile
     { bcConfig     :: !Config
     , bcResolver   :: !LoadedResolver
       -- ^ How we resolve which dependencies to install given a set of
       -- packages.
     , bcWantedMiniBuildPlan :: !MiniBuildPlan
       -- ^ Compiler version wanted for this build
+    , bcGHCVariant :: !GHCVariant
+      -- ^ The variant of GHC used to select a GHC bindist.
+    }
+
+data BuildConfig = BuildConfig
+    { bcBuildConfigNoFile :: !BuildConfigNoFile
     , bcPackageEntries :: ![PackageEntry]
       -- ^ Local packages
     , bcExtraDeps  :: !(Map PackageName Version)
@@ -494,8 +505,6 @@ data BuildConfig = BuildConfig
     , bcImplicitGlobal :: !Bool
       -- ^ Are we loading from the implicit global stack.yaml? This is useful
       -- for providing better error messages.
-    , bcGHCVariant :: !GHCVariant
-      -- ^ The variant of GHC used to select a GHC bindist.
     }
 
 -- | Directory containing the project's stack.yaml file
@@ -508,12 +517,11 @@ bcWorkDir bconfig = do
   workDir <- getWorkDir
   return (bcRoot bconfig </> workDir)
 
-bcWantedCompiler :: BuildConfig -> CompilerVersion
-bcWantedCompiler = mbpCompilerVersion . bcWantedMiniBuildPlan
+bcWantedCompiler :: (MonadReader env m, HasBuildConfigNoFile env) => m CompilerVersion
+bcWantedCompiler = asks (mbpCompilerVersion . bcWantedMiniBuildPlan . getBuildConfigNoFile)
 
--- | Configuration after the environment has been setup.
-data EnvConfig = EnvConfig
-    {envConfigBuildConfig :: !BuildConfig
+data EnvConfigNoFile = EnvConfigNoFile
+    {envConfigBuildConfigNoFile :: !BuildConfigNoFile
     ,envConfigCabalVersion :: !Version
     -- ^ This is the version of Cabal that stack will use to compile Setup.hs files
     -- in the build process.
@@ -522,18 +530,48 @@ data EnvConfig = EnvConfig
     -- depends on as a library and which is displayed when running
     -- @stack list-dependencies | grep Cabal@ in the stack project.
     ,envConfigCompilerVersion :: !CompilerVersion
-    ,envConfigCompilerBuild :: !CompilerBuild
-    ,envConfigPackages   :: !(Map (Path Abs Dir) TreatLikeExtraDep)}
+    ,envConfigCompilerBuild :: !CompilerBuild }
+instance HasBuildConfigNoFile EnvConfigNoFile where
+    getBuildConfigNoFile = envConfigBuildConfigNoFile
+    {-# INLINE getBuildConfigNoFile  #-}
+instance HasConfig EnvConfigNoFile
+instance HasPlatform EnvConfigNoFile
+instance HasGHCVariant EnvConfigNoFile
+instance HasStackRoot EnvConfigNoFile
+class (HasBuildConfigNoFile r, HasGHCVariant r) => HasEnvConfigNoFile r where
+    getEnvConfigNoFile :: r -> EnvConfigNoFile
+instance HasEnvConfigNoFile EnvConfigNoFile where
+    getEnvConfigNoFile = id
+
+-- | Configuration after the environment has been setup.
+data EnvConfig = EnvConfig
+    {envConfigBuildConfig :: !BuildConfig
+    ,envConfigNoFile :: !EnvConfigNoFile
+    ,envConfigPackages   :: !(Map (Path Abs Dir) TreatLikeExtraDep)
+    }
 instance HasBuildConfig EnvConfig where
     getBuildConfig = envConfigBuildConfig
+instance HasBuildConfigNoFile EnvConfig
 instance HasConfig EnvConfig
 instance HasPlatform EnvConfig
 instance HasGHCVariant EnvConfig
 instance HasStackRoot EnvConfig
-class (HasBuildConfig r, HasGHCVariant r) => HasEnvConfig r where
+instance HasEnvConfigNoFile EnvConfig where
+    getEnvConfigNoFile = envConfigNoFile
+    {-# INLINE getEnvConfigNoFile #-}
+class (HasBuildConfig r, HasEnvConfigNoFile r, HasGHCVariant r) => HasEnvConfig r where
     getEnvConfig :: r -> EnvConfig
 instance HasEnvConfig EnvConfig where
     getEnvConfig = id
+
+-- | Class for environment values which may or may not have an
+-- 'EnvConfig', but definitely have an 'EnvConfigNoFile'.
+class HasEnvConfigNoFile env => HasMaybeEnvConfig env where
+    getMaybeEnvConfig :: env -> Maybe EnvConfig
+instance HasMaybeEnvConfig EnvConfigNoFile where
+    getMaybeEnvConfig _ = Nothing
+instance HasMaybeEnvConfig EnvConfig where
+    getMaybeEnvConfig = Just
 
 -- | Value returned by 'Stack.Config.loadConfig'.
 data LoadConfig m = LoadConfig
@@ -683,8 +721,8 @@ instance HasPlatform (Platform,PlatformVariant) where
 -- | Class for environment values which have a GHCVariant
 class HasGHCVariant env where
     getGHCVariant :: env -> GHCVariant
-    default getGHCVariant :: HasBuildConfig env => env -> GHCVariant
-    getGHCVariant = bcGHCVariant . getBuildConfig
+    default getGHCVariant :: HasBuildConfigNoFile env => env -> GHCVariant
+    getGHCVariant = bcGHCVariant . getBuildConfigNoFile
     {-# INLINE getGHCVariant #-}
 instance HasGHCVariant GHCVariant where
     getGHCVariant = id
@@ -692,8 +730,8 @@ instance HasGHCVariant GHCVariant where
 -- | Class for environment values that can provide a 'Config'.
 class (HasStackRoot env, HasPlatform env) => HasConfig env where
     getConfig :: env -> Config
-    default getConfig :: HasBuildConfig env => env -> Config
-    getConfig = bcConfig . getBuildConfig
+    default getConfig :: HasBuildConfigNoFile env => env -> Config
+    getConfig = bcConfig . getBuildConfigNoFile
     {-# INLINE getConfig #-}
 instance HasStackRoot Config
 instance HasPlatform Config
@@ -701,13 +739,28 @@ instance HasConfig Config where
     getConfig = id
     {-# INLINE getConfig #-}
 
+-- | Class for environment values that can provide a 'BuildConfigNoFile'.
+class HasConfig env => HasBuildConfigNoFile env where
+    getBuildConfigNoFile :: env -> BuildConfigNoFile
+    default getBuildConfigNoFile :: HasBuildConfig env => env -> BuildConfigNoFile
+    getBuildConfigNoFile = bcBuildConfigNoFile . getBuildConfig
+    {-# INLINE getBuildConfigNoFile #-}
+instance HasStackRoot BuildConfigNoFile
+instance HasPlatform BuildConfigNoFile
+instance HasGHCVariant BuildConfigNoFile
+instance HasConfig BuildConfigNoFile
+instance HasBuildConfigNoFile BuildConfigNoFile where
+    getBuildConfigNoFile = id
+    {-# INLINE getBuildConfigNoFile #-}
+
 -- | Class for environment values that can provide a 'BuildConfig'.
-class HasConfig env => HasBuildConfig env where
+class HasBuildConfigNoFile env => HasBuildConfig env where
     getBuildConfig :: env -> BuildConfig
 instance HasStackRoot BuildConfig
 instance HasPlatform BuildConfig
 instance HasGHCVariant BuildConfig
 instance HasConfig BuildConfig
+instance HasBuildConfigNoFile BuildConfig
 instance HasBuildConfig BuildConfig where
     getBuildConfig = id
     {-# INLINE getBuildConfig #-}
@@ -1252,7 +1305,7 @@ snapshotsDir = do
     return $ configStackRoot config </> $(mkRelDir "snapshots") </> platform
 
 -- | Installation root for dependencies
-installationRootDeps :: (MonadThrow m, MonadReader env m, HasEnvConfig env) => m (Path Abs Dir)
+installationRootDeps :: (MonadThrow m, MonadReader env m, HasEnvConfigNoFile env) => m (Path Abs Dir)
 installationRootDeps = do
     config <- asks getConfig
     -- TODO: also useShaPathOnWindows here, once #1173 is resolved.
@@ -1282,10 +1335,10 @@ hoogleDatabasePath = do
 -- | Path for platform followed by snapshot name followed by compiler
 -- name.
 platformSnapAndCompilerRel
-    :: (MonadReader env m, HasEnvConfig env, MonadThrow m)
+    :: (MonadReader env m, HasEnvConfigNoFile env, MonadThrow m)
     => m (Path Rel Dir)
 platformSnapAndCompilerRel = do
-    bc <- asks getBuildConfig
+    bc <- asks getBuildConfigNoFile
     platform <- platformGhcRelDir
     name <- parseRelDir $ T.unpack $ resolverDirName $ bcResolver bc
     ghc <- compilerVersionDir
@@ -1293,10 +1346,10 @@ platformSnapAndCompilerRel = do
 
 -- | Relative directory for the platform and GHC identifier
 platformGhcRelDir
-    :: (MonadReader env m, HasEnvConfig env, MonadThrow m)
+    :: (MonadReader env m, HasEnvConfigNoFile env, MonadThrow m)
     => m (Path Rel Dir)
 platformGhcRelDir = do
-    envConfig <- asks getEnvConfig
+    envConfig <- asks getEnvConfigNoFile
     verOnly <- platformGhcVerOnlyRelDirStr
     parseRelDir (mconcat [ verOnly
                          , compilerBuildSuffix (envConfigCompilerBuild envConfig)])
@@ -1333,15 +1386,15 @@ useShaPathOnWindows =
     return
 #endif
 
-compilerVersionDir :: (MonadThrow m, MonadReader env m, HasEnvConfig env) => m (Path Rel Dir)
+compilerVersionDir :: (MonadThrow m, MonadReader env m, HasEnvConfigNoFile env) => m (Path Rel Dir)
 compilerVersionDir = do
-    compilerVersion <- asks (envConfigCompilerVersion . getEnvConfig)
+    compilerVersion <- asks (envConfigCompilerVersion . getEnvConfigNoFile)
     parseRelDir $ case compilerVersion of
         GhcVersion version -> versionString version
         GhcjsVersion {} -> compilerVersionString compilerVersion
 
 -- | Package database for installing dependencies into
-packageDatabaseDeps :: (MonadThrow m, MonadReader env m, HasEnvConfig env) => m (Path Abs Dir)
+packageDatabaseDeps :: (MonadThrow m, MonadReader env m, HasEnvConfigNoFile env) => m (Path Abs Dir)
 packageDatabaseDeps = do
     root <- installationRootDeps
     return $ root </> $(mkRelDir "pkgdb")
@@ -1353,7 +1406,7 @@ packageDatabaseLocal = do
     return $ root </> $(mkRelDir "pkgdb")
 
 -- | Extra package databases
-packageDatabaseExtra :: (MonadThrow m, MonadReader env m, HasEnvConfig env) => m [Path Abs Dir]
+packageDatabaseExtra :: (MonadThrow m, MonadReader env m, HasBuildConfig env) => m [Path Abs Dir]
 packageDatabaseExtra = do
     bc <- asks getBuildConfig
     return $ bcExtraPackageDBs bc
@@ -1396,11 +1449,19 @@ hpcReportDir = do
 extraBinDirs :: (MonadThrow m, MonadReader env m, HasEnvConfig env)
              => m (Bool -> [Path Abs Dir])
 extraBinDirs = do
-    deps <- installationRootDeps
+    deps <- extraBinDirsNoFile
     local <- installationRootLocal
     return $ \locals -> if locals
-        then [local </> bindirSuffix, deps </> bindirSuffix]
-        else [deps </> bindirSuffix]
+        then local </> bindirSuffix : deps
+        else deps
+
+-- | Same as 'extraBinDirs', but for an 'HasEnvConfigNoFile' context
+extraBinDirsNoFile
+    :: (MonadThrow m, MonadReader env m, HasEnvConfigNoFile env)
+    => m [Path Abs Dir]
+extraBinDirsNoFile = do
+    deps <- installationRootDeps
+    return [deps </> bindirSuffix]
 
 -- | Get the minimal environment override, useful for just calling external
 -- processes like git or ghc
@@ -1418,8 +1479,8 @@ minimalEnvSettings =
     , esLocaleUtf8 = False
     }
 
-getWhichCompiler :: (MonadReader env m, HasEnvConfig env) => m WhichCompiler
-getWhichCompiler = asks (whichCompiler . envConfigCompilerVersion . getEnvConfig)
+getWhichCompiler :: (MonadReader env m, HasEnvConfigNoFile env) => m WhichCompiler
+getWhichCompiler = asks (whichCompiler . envConfigCompilerVersion . getEnvConfigNoFile)
 
 -- | Get the path for the given compiler ignoring any local binaries.
 --
