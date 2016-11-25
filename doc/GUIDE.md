@@ -1754,7 +1754,7 @@ explicit specification of all packages.
 3. Use the `--resolver` Stack option to ensure a specific GHC version and
    package set is used.
 
-Even with this configuration, it is still possible for local configuration
+Even with this configuration, it is still possible for configuration
 files to impact `stack runghc`, which is why `stack script` is strongly
 recommended in general. For those curious, here is an example with `runghc`:
 
@@ -1770,6 +1770,10 @@ recommended in general. For those curious, here is an example with `runghc`:
   -hide-all-packages
   -}
 ```
+
+The `runghc` command is still very useful, especially when you're working on a
+project and want to access the package databases and configurations used by
+that project. See the next section for more information on configuration files.
 
 ## Finding project configs, and the implicit global
 
