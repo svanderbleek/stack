@@ -1696,7 +1696,7 @@ arguments, or by providing a comma or space separated list. For example:
 
 ### Stack configuration for scripts
 
-With the `script` command, all configuration files are ignored to provide a
+With the `script` command, all Stack configuration files are ignored to provide a
 completely reliable script running experience. However, see the example below
 with `runghc` for an approach to scripts which will respect your configuration
 files. When using `runghc`, if the current working directory is inside a
