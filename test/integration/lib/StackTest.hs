@@ -5,7 +5,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
 import Control.Concurrent
 import Control.Exception
-import Data.List (intercalate)
+import Data.List (intercalate, isInfixOf)
 import System.Environment
 import System.FilePath
 import System.Directory
@@ -109,6 +109,11 @@ stackCheckStderr args check = do
     if ec /= ExitSuccess
         then error $ "Exited with exit code: " ++ show ec
         else check err
+
+expectMessage :: String -> String -> IO ()
+expectMessage msg stderr =
+    unless (msg `isInfixOf` stderr)
+        (error $ "Expected a warning: \n" ++ show msg)
 
 doesNotExist :: FilePath -> IO ()
 doesNotExist fp = do

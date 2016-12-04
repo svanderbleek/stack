@@ -13,11 +13,6 @@ main = do
         ["build", "has-exe-foo-too"]
         (expectMessage buildMessage2)
 
-expectMessage :: String -> String -> IO ()
-expectMessage msg stderr =
-    unless (msg `isInfixOf` stderr)
-        (error $ "Expected a warning: \n" ++ show msg)
-
 buildMessage1 =
     unlines
         [ "Building several executables with the same name: 'also-has-exe-foo:foo', 'has-exe-foo:foo'."
